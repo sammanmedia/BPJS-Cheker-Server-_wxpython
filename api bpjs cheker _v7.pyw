@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-BPJS SERVER CHECKER V7
+BPJS SERVER CHECKER V8
 SAMMAN MEDIA
 External CFG + Category Separator + Auto Cek + Export CSV
 + TAMBAHKAN SERVER (popup mudah)
 + LIST SERVER (cari, pilih banyak, hapus, aktif/nonaktif)
++ EDIT SERVER (tombol EDIT di dalam LIST SERVER, popup form edit)
++ Pemisah kategori satu baris bersih (tanpa ==== dan ----)
 + Semua error tampil di kotak pesan dan dicatat ke error.log
 Windows 10 | wxPython
 """
@@ -34,7 +36,7 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CFG_FILE = os.path.join(APP_DIR, "api-link-bpjs.cfg")
 ERROR_LOG = os.path.join(APP_DIR, "error.log")
 
-APP_VERSION = "V7"
+APP_VERSION = "V8"
 MAX_WORKERS = 6
 
 DEFAULT_CATEGORY = "SERVER TANPA KATEGORI"
@@ -426,15 +428,18 @@ def insert_entry(entries, new_entry):
 
 class AddServerDialog(wx.Dialog):
 
-    def __init__(self, parent, categories, entries):
+    def __init__(self, parent, categories, entries, edit_entry=None):
 
         wx.Dialog.__init__(
             self,
             parent,
-            title="TAMBAHKAN SERVER"
+            title="EDIT SERVER" if edit_entry else "TAMBAHKAN SERVER"
         )
 
         self.entries = entries
+
+        # Kunci server yang sedang diedit (dilewati saat cek duplikat)
+        self.edit_key = entry_key(edit_entry) if edit_entry else None
 
         categories = list(categories)
 
@@ -446,8 +451,13 @@ class AddServerDialog(wx.Dialog):
         info = wx.StaticText(
             self,
             label=(
-                "Isi data server lalu klik SIMPAN.\n"
-                "Data langsung masuk ke file api-link-bpjs.cfg."
+                (
+                    "Ubah data server lalu klik SIMPAN.\n"
+                    "Perubahan langsung ditulis ke file api-link-bpjs.cfg."
+                    if edit_entry else
+                    "Isi data server lalu klik SIMPAN.\n"
+                    "Data langsung masuk ke file api-link-bpjs.cfg."
+                )
             )
         )
 
@@ -546,6 +556,24 @@ class AddServerDialog(wx.Dialog):
 
         self.btn_save.Bind(wx.EVT_BUTTON, self.on_save)
 
+        if edit_entry:
+
+            self.txt_name.SetValue(edit_entry["name"])
+            self.txt_url.SetValue(edit_entry["url"])
+
+            self.cho_enabled.SetSelection(
+                0 if edit_entry["enabled"] else 1
+            )
+
+            self.cmb_category.SetValue(edit_entry["category"])
+
+            desc = edit_entry["description"]
+
+            if desc == "Tidak ada deskripsi.":
+                desc = ""
+
+            self.txt_desc.SetValue(desc)
+
         self.CentreOnParent()
         self.txt_name.SetFocus()
 
@@ -581,6 +609,10 @@ class AddServerDialog(wx.Dialog):
             return
 
         for e in self.entries:
+
+            # Saat edit, server itu sendiri tidak dianggap duplikat.
+            if self.edit_key and entry_key(e) == self.edit_key:
+                continue
 
             if e["name"].lower() == name.lower():
                 wx.MessageBox(
@@ -624,6 +656,20 @@ class AddServerDialog(wx.Dialog):
                 or NEW_SERVER_CATEGORY
             )
         }
+
+
+# =====================================================
+# POPUP: EDIT SERVER
+# =====================================================
+
+class EditServerDialog(AddServerDialog):
+    """Form edit: sama dengan form tambah, tetapi terisi data lama."""
+
+    def __init__(self, parent, categories, entries, entry):
+
+        AddServerDialog.__init__(
+            self, parent, categories, entries, edit_entry=entry
+        )
 
 
 # =====================================================
@@ -677,7 +723,8 @@ class ListServerDialog(wx.Dialog):
                 "(tahan Ctrl atau Shift lalu klik), "
                 "kemudian klik HAPUS TERPILIH. "
                 "Bisa juga tekan tombol Delete di keyboard "
-                "atau klik kanan."
+                "atau klik kanan. Untuk mengubah data, pilih satu "
+                "server lalu klik EDIT (atau klik dua kali barisnya)."
             )
         )
 
@@ -714,6 +761,10 @@ class ListServerDialog(wx.Dialog):
             self, wx.ID_ANY, "TAMBAH SERVER", size=(150, 40)
         )
 
+        self.btn_edit = wx.Button(
+            self, wx.ID_ANY, "EDIT", size=(110, 40)
+        )
+
         self.btn_toggle = wx.Button(
             self, wx.ID_ANY, "AKTIF / NONAKTIF", size=(160, 40)
         )
@@ -727,6 +778,7 @@ class ListServerDialog(wx.Dialog):
         )
 
         btns.Add(self.btn_add, 0, wx.RIGHT, 10)
+        btns.Add(self.btn_edit, 0, wx.RIGHT, 10)
         btns.Add(self.btn_toggle, 0, wx.RIGHT, 10)
         btns.Add(self.btn_delete, 0)
         btns.AddStretchSpacer(1)
@@ -740,6 +792,7 @@ class ListServerDialog(wx.Dialog):
 
         self.txt_search.Bind(wx.EVT_TEXT, self.on_search)
         self.btn_add.Bind(wx.EVT_BUTTON, self.on_add)
+        self.btn_edit.Bind(wx.EVT_BUTTON, self.on_edit)
         self.btn_toggle.Bind(wx.EVT_BUTTON, self.on_toggle)
         self.btn_delete.Bind(wx.EVT_BUTTON, self.on_delete)
         self.btn_close.Bind(
@@ -753,6 +806,7 @@ class ListServerDialog(wx.Dialog):
             wx.EVT_LIST_ITEM_DESELECTED, self.on_select_change
         )
         self.list.Bind(wx.EVT_LIST_KEY_DOWN, self.on_key)
+        self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_edit)
         self.list.Bind(
             wx.EVT_LIST_ITEM_RIGHT_CLICK, self.on_right_click
         )
@@ -848,6 +902,7 @@ class ListServerDialog(wx.Dialog):
 
         self.btn_delete.Enable(selected > 0)
         self.btn_toggle.Enable(selected > 0)
+        self.btn_edit.Enable(selected == 1)
 
     # ---------- event ----------
 
@@ -878,9 +933,11 @@ class ListServerDialog(wx.Dialog):
 
         menu = wx.Menu()
 
+        item_edit = menu.Append(wx.ID_ANY, "Edit server")
         item_delete = menu.Append(wx.ID_ANY, "Hapus terpilih")
         item_toggle = menu.Append(wx.ID_ANY, "Aktif / nonaktif")
 
+        self.Bind(wx.EVT_MENU, self.on_edit, item_edit)
         self.Bind(wx.EVT_MENU, self.on_delete, item_delete)
         self.Bind(wx.EVT_MENU, self.on_toggle, item_toggle)
 
@@ -921,6 +978,22 @@ class ListServerDialog(wx.Dialog):
     def on_add(self, event):
 
         if self.frame.show_add_dialog(self):
+            self.refresh()
+
+    @safe
+    def on_edit(self, event):
+
+        selected = self.selected_entries()
+
+        if len(selected) != 1:
+            wx.MessageBox(
+                "Pilih satu server saja yang ingin diedit.",
+                "INFORMASI",
+                wx.OK | wx.ICON_INFORMATION
+            )
+            return
+
+        if self.frame.show_edit_dialog(selected[0], self):
             self.refresh()
 
     @safe
@@ -1300,6 +1373,27 @@ class BPJSChecker(wx.Frame):
         except RuntimeError:
             pass
 
+    def fit_category_column(self):
+        """
+        Lebarkan kolom NAMA SERVER secukupnya agar teks kategori
+        (misal "CEK WEB BPJS DEVELOPMENT DAN PORTAL") tidak terpotong.
+        """
+
+        try:
+            dc = wx.ClientDC(self.table)
+            dc.SetFont(bold_font(10))
+
+            widest = 0
+
+            for server in self.servers:
+                width = dc.GetTextExtent(server["category"]).GetWidth()
+                widest = max(widest, width)
+
+            self.table.SetColumnWidth(1, max(190, widest + 30))
+
+        except RuntimeError:
+            pass
+
     def on_table_size(self, event):
 
         event.Skip()
@@ -1392,6 +1486,8 @@ class BPJSChecker(wx.Frame):
 
         self.table.DeleteAllItems()
 
+        self.fit_category_column()
+
         previous_category = None
         number = 0
 
@@ -1407,15 +1503,8 @@ class BPJSChecker(wx.Frame):
                     self.table.GetItemCount(), ""
                 )
 
-                self.table.SetItem(
-                    row, 1,
-                    "════ " + category + " ════"
-                )
-
-                for col in range(2, 7):
-                    self.table.SetItem(
-                        row, col, "────────────────"
-                    )
+                # Teks kategori polos, kolom lain dibiarkan kosong.
+                self.table.SetItem(row, 1, category)
 
                 self.table.SetItemBackgroundColour(
                     row, wx.Colour(45, 65, 85)
@@ -1467,6 +1556,8 @@ class BPJSChecker(wx.Frame):
         self.status.SetLabel(
             f"STATUS: {len(self.servers)} SERVER AKTIF | CFG BERHASIL DIMUAT"
         )
+
+        self.fit_last_column()
 
     # =================================
     # RELOAD
@@ -1549,6 +1640,76 @@ class BPJSChecker(wx.Frame):
                 f"STATUS: SERVER '{values['name']}' DISIMPAN "
                 f"(enabled = false, tidak ditampilkan di tabel)"
             )
+
+        return True
+
+    def show_edit_dialog(self, entry, parent_window=None):
+        """
+        Tampilkan popup edit server. Mengembalikan True bila CFG
+        berubah (atau perlu dimuat ulang), False bila dibatalkan.
+        """
+
+        header, entries = read_cfg_raw()
+
+        old_key = entry_key(entry)
+
+        position = None
+
+        for i, e in enumerate(entries):
+            if entry_key(e) == old_key:
+                position = i
+                break
+
+        if position is None:
+
+            wx.MessageBox(
+                "Server tidak ditemukan di CFG (mungkin file CFG "
+                "sudah diubah). Daftar akan dimuat ulang.",
+                "SERVER TIDAK DITEMUKAN",
+                wx.OK | wx.ICON_WARNING
+            )
+
+            return True
+
+        original = entries[position]
+
+        categories = []
+
+        for e in entries:
+            if e["category"] not in categories:
+                categories.append(e["category"])
+
+        dlg = EditServerDialog(
+            parent_window or self, categories, entries, original
+        )
+
+        try:
+            result = dlg.ShowModal()
+            values = dlg.get_values()
+
+        finally:
+            dlg.Destroy()
+
+        if result != wx.ID_OK:
+            return False
+
+        if values["category"] == original["category"]:
+            # Kategori sama: posisi di CFG tetap.
+            entries[position] = values
+
+        else:
+            # Pindah kategori: taruh di akhir kategori barunya.
+            del entries[position]
+            insert_entry(entries, values)
+
+        write_cfg(header, entries)
+
+        self.load_config()
+
+        self.status.SetLabel(
+            f"STATUS: SERVER '{values['name']}' DIPERBARUI | "
+            f"{len(self.servers)} SERVER AKTIF"
+        )
 
         return True
 
